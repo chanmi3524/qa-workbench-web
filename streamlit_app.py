@@ -8,13 +8,13 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import streamlit as st
 
-from qa_web.db import init_db, fetch_all, fetch_one, execute
-from qa_web.services import (
+from db import init_db, fetch_all, fetch_one, execute
+from services import (
     CHECK_RULES, criteria_text, judge_value, inspection_overall,
     create_defect_from_inspection, delivery_urgency, monthly_demand_map,
     due_tasks, extract_text_tesseract, best_effort_autofill
 )
-from qa_web.ui import inject_css, title, metric
+from ui import inject_css, title, metric
 
 st.set_page_config(
     page_title="QA Workbench",
