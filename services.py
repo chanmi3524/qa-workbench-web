@@ -1,7 +1,6 @@
 
 from __future__ import annotations
-from datetime import date, timedelta, datetime
-import json
+from datetime import date, datetime, timedelta
 import re
 from db import fetch_all, fetch_one, execute
 
@@ -31,8 +30,7 @@ def judge_value(rule, raw):
     if not s:
         return "미입력"
     if rule["kind"] == "text_ok":
-        compact = s.lower().replace(" ","")
-        return "합격" if ("양호" in s or "ok" in compact or "정상" in s) else "확인필요"
+        return "합격" if ("양호" in s or "정상" in s or "ok" in s.lower()) else "확인필요"
     try:
         v = float(s)
     except Exception:
@@ -41,109 +39,81 @@ def judge_value(rule, raw):
 
 def inspection_overall(details):
     verdicts = [d["verdict"] for d in details]
-    return "불합격" if "불합격" in verdicts or "확인필요" in verdicts else "합격"
+    return "불합격" if any(v in ("불합격","확인필요") for v in verdicts) else "합격"
 
 def create_defect_from_inspection(inspection_id, item_code, item_name, qty, details):
     ng = [d for d in details if d.get("verdict") in ("불합격","확인필요")]
     if not ng:
-        return None
-    existing = fetch_one(
-        "SELECT id FROM defects WHERE source='검사자동연계' AND source_inspection_id=?",
-        (inspection_id,)
-    )
-    if existing:
-        return existing["id"]
-
-    labels = [d["label"] for d in ng]
-    issue = "자동검사 NG: " + ", ".join(labels[:5])
-    action = " | ".join(
-        f'{d["label"]} 측정 {d["value"]} / 기준 {d["criteria"]} / {d["verdict"]}'
-        for d in ng
-    )
-    return execute("""
-        INSERT INTO defects(
-            defect_date,source,item_code,item_name,issue,qty,status,action,source_inspection_id
-        ) VALUES(?,?,?,?,?,?,?,?,?)
-    """, (
-        date.today().isoformat(),"검사자동연계",item_code,item_name,issue,qty,
-        "접수",action,inspection_id
-    ))
+        return
+    if fetch_one("SELECT id FROM defects WHERE source_inspection_id=?", (inspection_id,)):
+        return
+    issue = "자동검사 NG: " + ", ".join(d["label"] for d in ng[:4])
+    action = " | ".join(f'{d["label"]}: {d["value"]} / {d["criteria"]}' for d in ng)
+    execute("""INSERT INTO defects(
+        defect_date,source,item_code,item_name,issue,qty,status,action,source_inspection_id
+    ) VALUES(?,?,?,?,?,?,?,?,?)""",
+    (date.today().isoformat(),"검사자동연계",item_code,item_name,issue,qty,"접수",action,inspection_id))
 
 def delivery_urgency(due_date):
     try:
-        due = datetime.strptime(due_date, "%Y-%m-%d").date()
+        due = datetime.strptime(due_date,"%Y-%m-%d").date()
+        days = (due-date.today()).days
     except Exception:
-        return ("기타", "#EEF2F6")
-    days = (due - date.today()).days
-    if days < 15:
-        return (f"{days}일", "#FDEBEC")
-    if days <= 30:
-        return (f"{days}일", "#FFF7D6")
-    return (f"{days}일", "#EAF8EE")
+        return ("기타","#eef2f6")
+    if days < 15: return (f"{days}일","#fdebec")
+    if days <= 30: return (f"{days}일","#fff7d6")
+    return (f"{days}일","#eaf8ee")
 
 def monthly_demand_map():
     today = date.today()
     end = today + timedelta(days=30)
     demand = {}
-    plans = fetch_all("""
-        SELECT * FROM production_plans
-        WHERE status != '생산완료'
-    """)
+    plans = fetch_all("SELECT * FROM production_plans WHERE status!='생산완료'")
     bom = fetch_all("SELECT * FROM bom")
     for p in plans:
         try:
-            due = datetime.strptime(p["due_date"], "%Y-%m-%d").date()
+            due = datetime.strptime(p["due_date"],"%Y-%m-%d").date()
         except Exception:
             continue
-        if not (today <= due <= end):
+        if not(today <= due <= end):
             continue
-        qty = float(p["qty"] or 0)
-        product = p["product_code"]
-        demand[product] = demand.get(product, 0) + qty
+        q = float(p["qty"] or 0)
+        demand[p["product_code"]] = demand.get(p["product_code"],0)+q
         for b in bom:
-            if b["product_code"] == product:
-                code = b["material_code"]
-                demand[code] = demand.get(code, 0) + qty * float(b["qty"] or 0)
+            if b["product_code"] == p["product_code"]:
+                demand[b["material_code"]] = demand.get(b["material_code"],0) + q*float(b["qty"])
     return demand
 
 def due_tasks():
     now = datetime.now()
-    rows = fetch_all("SELECT * FROM tasks WHERE status != '완료' AND alarm_enabled=1")
-    due = []
-    for r in rows:
-        if not r.get("due_time"):
+    out = []
+    for r in fetch_all("SELECT * FROM tasks WHERE status!='완료' AND alarm_enabled=1"):
+        if not r.get("due_time") or r.get("alarm_notified"):
             continue
         try:
-            dt = datetime.strptime(r["due_date"]+" "+r["due_time"], "%Y-%m-%d %H:%M")
+            dt = datetime.strptime(r["due_date"]+" "+r["due_time"],"%Y-%m-%d %H:%M")
         except Exception:
             continue
-        if dt <= now and not r.get("alarm_notified"):
-            due.append(r)
-    return due
+        if dt <= now:
+            out.append(r)
+    return out
 
 def extract_text_tesseract(uploaded_file):
-    """Best-effort server OCR. Handwriting recognition may require manual correction."""
     try:
         import pytesseract
         from PIL import Image
-        img = Image.open(uploaded_file).convert("RGB")
-        return pytesseract.image_to_string(img, lang="eng+kor")
+        return pytesseract.image_to_string(Image.open(uploaded_file).convert("RGB"), lang="eng+kor")
     except Exception:
         return ""
 
-def numeric_candidates(text):
-    text = (text or "").replace(",", ".").replace("O","0").replace("o","0")
-    return re.findall(r"[-+]?(?:\d+\.\d+|\d+)", text)
-
 def best_effort_autofill(text):
-    """Very conservative OCR autofill: only fill clear sequential numeric candidates."""
-    nums = numeric_candidates(text)
+    nums = re.findall(r"[-+]?(?:\d+\.\d+|\d+)", (text or "").replace(",","."))
     out = {r["key"]:"" for r in CHECK_RULES}
-    numeric_rules = [r for r in CHECK_RULES if r["kind"] == "range"]
-    for rule, token in zip(numeric_rules, nums):
-        out[rule["key"]] = token
+    numeric_rules = [r for r in CHECK_RULES if r["kind"]=="range"]
+    for r, token in zip(numeric_rules, nums):
+        out[r["key"]] = token
     if "양호" in (text or ""):
         for r in CHECK_RULES:
-            if r["kind"] == "text_ok":
+            if r["kind"]=="text_ok":
                 out[r["key"]] = "양호"
     return out
