@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from __future__ import annotations
+
 import json
 import calendar
 from datetime import date, datetime, timedelta
