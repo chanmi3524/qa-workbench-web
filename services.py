@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta, datetime
 import json
 import re
-from .db import fetch_all, fetch_one, execute
+from db import fetch_all, fetch_one, execute
 
 CHECK_RULES = [
     {"key":"current_28v","label":"28V 소비전류","kind":"range","min":0.060,"max":0.070,"unit":"A"},
