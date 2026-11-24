@@ -41,18 +41,19 @@ def inspection_overall(details):
     verdicts = [d["verdict"] for d in details]
     return "불합격" if any(v in ("불합격","확인필요") for v in verdicts) else "합격"
 
-def create_defect_from_inspection(inspection_id, item_code, item_name, qty, details):
+def create_defect_from_inspection(inspection_id, item_code, item_name, qty, details, created_by=""):
     ng = [d for d in details if d.get("verdict") in ("불합격","확인필요")]
     if not ng:
-        return
-    if fetch_one("SELECT id FROM defects WHERE source_inspection_id=?", (inspection_id,)):
-        return
+        return None
+    existing = fetch_one("SELECT id FROM defects WHERE source_inspection_id=?", (inspection_id,))
+    if existing:
+        return existing["id"]
     issue = "자동검사 NG: " + ", ".join(d["label"] for d in ng[:4])
     action = " | ".join(f'{d["label"]}: {d["value"]} / {d["criteria"]}' for d in ng)
-    execute("""INSERT INTO defects(
-        defect_date,source,item_code,item_name,issue,qty,status,action,source_inspection_id
-    ) VALUES(?,?,?,?,?,?,?,?,?)""",
-    (date.today().isoformat(),"검사자동연계",item_code,item_name,issue,qty,"접수",action,inspection_id))
+    return execute("""INSERT INTO defects(
+        defect_date,source,item_code,item_name,issue,qty,status,action,source_inspection_id,created_by,updated_by
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+    (date.today().isoformat(),"검사자동연계",item_code,item_name,issue,qty,"접수",action,inspection_id,created_by,created_by))
 
 def delivery_urgency(due_date):
     try:
@@ -84,10 +85,17 @@ def monthly_demand_map():
                 demand[b["material_code"]] = demand.get(b["material_code"],0) + q*float(b["qty"])
     return demand
 
-def due_tasks():
+def due_tasks(user_id):
     now = datetime.now()
+    rows = fetch_all(
+        """SELECT * FROM tasks
+           WHERE status!='완료' AND alarm_enabled=1
+             AND (visibility='public' OR owner_user_id=?)
+        """,
+        (user_id,)
+    )
     out = []
-    for r in fetch_all("SELECT * FROM tasks WHERE status!='완료' AND alarm_enabled=1"):
+    for r in rows:
         if not r.get("due_time") or r.get("alarm_notified"):
             continue
         try:
